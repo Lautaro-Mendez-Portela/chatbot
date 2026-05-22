@@ -6,7 +6,7 @@ import { UseGuards, Get, Request } from '@nestjs/common';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { Roles } from './decorators/roles.decorator';
 import { RolesGuard } from './guards/roles.guard';
-
+import { GetUser } from './decorators/get-user.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -24,16 +24,16 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Get('profile')
-  getProfile(@Request() req: any) {
-    return req.user;
+  getProfile(@GetUser() user: any) {
+    return user;
   }
 
   @Roles('ADMIN')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Get('admin')
-adminRoute() {
-  return {
-    message: 'Welcome admin',
-  };
-}
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Get('admin')
+  adminRoute() {
+    return {
+      message: 'Welcome admin',
+    };
+  }
 }
