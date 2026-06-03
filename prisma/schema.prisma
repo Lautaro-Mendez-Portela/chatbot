@@ -19,4 +19,43 @@ model User {
   role      Role     @default(USER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  documents Document[]
+  chatMessages ChatMessage[]
+
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  title     String
+  filename  String
+  path      String
+  content   String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  chunks DocumentChunk[]
+  chatMessages ChatMessage[]
+}
+
+model DocumentChunk {
+  id         String   @id @default(cuid())
+  content    String
+  position   Int
+  documentId String
+  embedding Json?
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+}
+
+model ChatMessage {
+  id         String   @id @default(cuid())
+  question   String
+  answer     String
+  documentId String
+  userId     String
+  createdAt  DateTime @default(now())
+
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id])
 }
