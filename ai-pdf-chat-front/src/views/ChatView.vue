@@ -15,6 +15,7 @@ const document = ref(null);
 const documents = ref([]);
 const chats = ref([]);
 const activeChatId = ref('');
+const expandedDocumentId = ref(props.documentId);
 const editingChatId = ref('');
 const editingChatTitle = ref('');
 const messages = ref([]);
@@ -169,6 +170,17 @@ const selectChat = async (chatId) => {
   await loadMessages();
 };
 
+const toggleDocument = (documentId) => {
+  if (documentId !== props.documentId) {
+    expandedDocumentId.value = documentId;
+    emit('open-chat', documentId);
+    return;
+  }
+
+  expandedDocumentId.value =
+    expandedDocumentId.value === documentId ? '' : documentId;
+};
+
 const startEditingChat = (chat) => {
   editingChatId.value = chat.id;
   editingChatTitle.value = chat.title;
@@ -316,6 +328,7 @@ watch(
   () => props.documentId,
   async () => {
     activeChatId.value = '';
+    expandedDocumentId.value = props.documentId;
     messages.value = [];
     await Promise.all([loadDocument(), loadDocuments()]);
     await loadChats();
@@ -346,57 +359,69 @@ onMounted(async () => {
       </button>
 
       <div class="sidebar-documents">
-        <button
+        <div
           v-for="item in documents"
           :key="item.id"
-          class="sidebar-document"
-          :class="{ selected: item.id === documentId }"
-          type="button"
-          @click="emit('open-chat', item.id)"
+          class="sidebar-document-group"
         >
-          <span>PDF</span>
-          <strong>{{ item.title }}</strong>
-        </button>
+          <button
+            class="sidebar-document"
+            :class="{ selected: item.id === documentId }"
+            type="button"
+            @click="toggleDocument(item.id)"
+          >
+            <span class="document-caret" :class="{ open: expandedDocumentId === item.id }">
+              ›
+            </span>
+            <span class="document-badge">PDF</span>
+            <strong>{{ item.title }}</strong>
+          </button>
+
+          <Transition name="document-chats">
+            <div
+              v-if="expandedDocumentId === item.id && item.id === documentId"
+              class="sidebar-chats nested"
+            >
+              <div
+                v-for="chat in chats"
+                :key="chat.id"
+                class="sidebar-chat"
+                :class="{ selected: chat.id === activeChatId }"
+              >
+                <template v-if="editingChatId === chat.id">
+                  <input
+                    v-model="editingChatTitle"
+                    class="chat-title-input"
+                    type="text"
+                    @keydown.enter.prevent="saveChatTitle(chat.id)"
+                    @keydown.esc.prevent="cancelEditingChat"
+                  />
+                  <div class="chat-actions">
+                    <button type="button" @click="saveChatTitle(chat.id)">Guardar</button>
+                    <button type="button" @click="cancelEditingChat">Cancelar</button>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <button class="chat-select" type="button" @click="selectChat(chat.id)">
+                    <strong>{{ chat.title }}</strong>
+                    <span>{{ chat._count?.messages || 0 }} mensajes</span>
+                  </button>
+
+                  <div class="chat-actions">
+                    <button type="button" @click="startEditingChat(chat)">Editar</button>
+                    <button type="button" @click="deleteChat(chat)">Eliminar</button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </Transition>
+        </div>
       </div>
 
       <button class="nav-button" type="button" @click="startNewChat">
         Nuevo chat
       </button>
-
-      <div class="sidebar-chats">
-        <div
-          v-for="chat in chats"
-          :key="chat.id"
-          class="sidebar-chat"
-          :class="{ selected: chat.id === activeChatId }"
-        >
-          <template v-if="editingChatId === chat.id">
-            <input
-              v-model="editingChatTitle"
-              class="chat-title-input"
-              type="text"
-              @keydown.enter.prevent="saveChatTitle(chat.id)"
-              @keydown.esc.prevent="cancelEditingChat"
-            />
-            <div class="chat-actions">
-              <button type="button" @click="saveChatTitle(chat.id)">Guardar</button>
-              <button type="button" @click="cancelEditingChat">Cancelar</button>
-            </div>
-          </template>
-
-          <template v-else>
-            <button class="chat-select" type="button" @click="selectChat(chat.id)">
-              <strong>{{ chat.title }}</strong>
-              <span>{{ chat._count?.messages || 0 }} mensajes</span>
-            </button>
-
-            <div class="chat-actions">
-              <button type="button" @click="startEditingChat(chat)">Editar</button>
-              <button type="button" @click="deleteChat(chat)">Eliminar</button>
-            </div>
-          </template>
-        </div>
-      </div>
 
       <div class="sidebar-footer">
         <button class="ghost-button full" type="button" @click="logout">
@@ -552,15 +577,21 @@ onMounted(async () => {
 .sidebar-documents {
   display: grid;
   gap: 6px;
-  max-height: 280px;
+  max-height: 440px;
   overflow: auto;
   padding-right: 2px;
+}
+
+.sidebar-document-group {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
 }
 
 .sidebar-document {
   min-width: 0;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   border: 0;
@@ -577,7 +608,21 @@ onMounted(async () => {
   background: #1b2638;
 }
 
-.sidebar-document span {
+.document-caret {
+  display: inline-grid;
+  place-items: center;
+  color: #8fa0b8;
+  font-size: 18px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 0.22s ease;
+}
+
+.document-caret.open {
+  transform: rotate(90deg);
+}
+
+.document-badge {
   color: #ffb4bd;
   font-size: 11px;
   font-weight: 950;
@@ -594,6 +639,35 @@ onMounted(async () => {
 .sidebar-chats {
   display: grid;
   gap: 6px;
+}
+
+.sidebar-chats.nested {
+  margin-left: 22px;
+  padding-left: 10px;
+  border-left: 1px solid #2a3850;
+  overflow: hidden;
+}
+
+.document-chats-enter-active,
+.document-chats-leave-active {
+  transition:
+    max-height 0.24s ease,
+    opacity 0.2s ease,
+    transform 0.24s ease;
+}
+
+.document-chats-enter-from,
+.document-chats-leave-to {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.document-chats-enter-to,
+.document-chats-leave-from {
+  max-height: 420px;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .sidebar-chat {
