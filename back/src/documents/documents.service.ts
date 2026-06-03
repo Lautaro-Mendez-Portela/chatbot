@@ -90,6 +90,7 @@ export class DocumentsService {
     documentId: string,
     question: string,
     userId: string,
+    useHistory = true,
   ) {
     const questionEmbedding = await this.aiService.createEmbedding(question);
 
@@ -114,7 +115,15 @@ export class DocumentsService {
       .map((chunk) => chunk.content)
       .join('\n\n---\n\n');
 
-    const answer = await this.aiService.generateAnswer(question, context);
+    const chatHistory = useHistory
+      ? await this.getChatHistoryContext(documentId, userId)
+      : '';
+
+    const answer = await this.aiService.generateAnswer(
+      question,
+      context,
+      chatHistory,
+    );
 
     await this.saveChatMessage({
       question,
@@ -198,6 +207,14 @@ export class DocumentsService {
       where: { id: documentId },
     });
 
+    try {
+      await fs.promises.unlink(document.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+
     return {
       message: 'Document deleted successfully',
     };
@@ -237,5 +254,26 @@ export class DocumentsService {
         createdAt: 'asc',
       },
     });
+  }
+
+  private async getChatHistoryContext(documentId: string, userId: string) {
+    const messages = await this.prisma.chatMessage.findMany({
+      where: {
+        documentId,
+        userId,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: 6,
+    });
+
+    return messages
+      .reverse()
+      .map(
+        (message) =>
+          `Usuario: ${message.question}\nAsistente: ${message.answer}`,
+      )
+      .join('\n\n');
   }
 }

@@ -12,17 +12,23 @@ export class AiService {
     return response.data.embedding;
   }
 
-  async generateAnswer(question: string, context: string) {
+  async generateAnswer(question: string, context: string, chatHistory = '') {
     const prompt = `
-Respondé usando únicamente el contexto proporcionado.
-Si la respuesta no está en el contexto, decí: "No encontré esa información en el documento."
+      Respondé usando principalmente el contexto del documento.
+      También podés usar el historial de conversación para entender referencias como "eso", "lo anterior" o "esa parte".
 
-Contexto:
-${context}
+      Si la respuesta no está en el contexto del documento, decí:
+      "No encontré esa información en el documento."
 
-Pregunta:
-${question}
-`;
+      Historial de conversación:
+      ${chatHistory}
+
+      Contexto del documento:
+      ${context}
+
+      Pregunta actual:
+      ${question}
+      `;
 
     const response = await axios.post('http://localhost:11434/api/generate', {
       model: 'llama3.2',

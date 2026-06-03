@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Post,
   UploadedFile,
@@ -18,6 +19,8 @@ import { Body, Param } from '@nestjs/common';
 import { AskDocumentDto } from './dto/ask-document.dto';
 import { Delete, Get } from '@nestjs/common';
 
+const MAX_PDF_SIZE = 15 * 1024 * 1024;
+
 @Controller('documents')
 export class DocumentsController {
   constructor(private documentsService: DocumentsService) {}
@@ -35,6 +38,23 @@ export class DocumentsController {
           callback(null, uniqueName);
         },
       }),
+      fileFilter: (req, file, callback) => {
+        const isPdf =
+          file.mimetype === 'application/pdf' &&
+          extname(file.originalname).toLowerCase() === '.pdf';
+
+        if (!isPdf) {
+          return callback(
+            new BadRequestException('Only PDF files are allowed'),
+            false,
+          );
+        }
+
+        callback(null, true);
+      },
+      limits: {
+        fileSize: MAX_PDF_SIZE,
+      },
     }),
   )
   async uploadFile(
@@ -81,6 +101,7 @@ export class DocumentsController {
       id,
       dto.question,
       user.userId,
+      dto.useHistory ?? true,
     );
   }
 
