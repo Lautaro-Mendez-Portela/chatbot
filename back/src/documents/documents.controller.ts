@@ -17,7 +17,7 @@ import { DocumentsService } from './documents.service';
 
 import { Body, Param } from '@nestjs/common';
 import { AskDocumentDto } from './dto/ask-document.dto';
-import { Delete, Get } from '@nestjs/common';
+import { Delete, Get, Patch } from '@nestjs/common';
 
 const MAX_PDF_SIZE = 15 * 1024 * 1024;
 
@@ -85,6 +85,39 @@ export class DocumentsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post(':id/chats')
+  createChat(@Param('id') id: string, @GetUser() user: any) {
+    return this.documentsService.createChat(id, user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/chats')
+  getChats(@Param('id') id: string, @GetUser() user: any) {
+    return this.documentsService.getChats(id, user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/chats/:chatId')
+  updateChat(
+    @Param('id') id: string,
+    @Param('chatId') chatId: string,
+    @Body('title') title: string,
+    @GetUser() user: any,
+  ) {
+    return this.documentsService.updateChat(id, chatId, user.userId, title);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/chats/:chatId')
+  deleteChat(
+    @Param('id') id: string,
+    @Param('chatId') chatId: string,
+    @GetUser() user: any,
+  ) {
+    return this.documentsService.deleteChat(id, chatId, user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   deleteDocument(@Param('id') id: string, @GetUser() user: any) {
     return this.documentsService.deleteDocument(id, user.userId);
@@ -106,8 +139,35 @@ export class DocumentsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post(':id/chats/:chatId/ask')
+  askDocumentChat(
+    @Param('id') id: string,
+    @Param('chatId') chatId: string,
+    @Body() dto: AskDocumentDto,
+    @GetUser() user: any,
+  ) {
+    return this.documentsService.findRelevantChunks(
+      id,
+      dto.question,
+      user.userId,
+      dto.useHistory ?? true,
+      chatId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get(':id/messages')
   getMessages(@Param('id') id: string, @GetUser() user: any) {
     return this.documentsService.getMessages(id, user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/chats/:chatId/messages')
+  getChatMessages(
+    @Param('id') id: string,
+    @Param('chatId') chatId: string,
+    @GetUser() user: any,
+  ) {
+    return this.documentsService.getMessages(id, user.userId, chatId);
   }
 }

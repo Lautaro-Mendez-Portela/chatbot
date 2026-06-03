@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as fs from 'fs';
 import { PDFParse } from 'pdf-parse';
@@ -91,7 +91,14 @@ export class DocumentsService {
     question: string,
     userId: string,
     useHistory = true,
+    chatId?: string,
   ) {
+    await this.ensureDocumentAccess(documentId, userId);
+
+    const chat = chatId
+      ? await this.findChatByUser(documentId, chatId, userId)
+      : await this.getOrCreateDefaultChat(documentId, userId);
+
     const questionEmbedding = await this.aiService.createEmbedding(question);
 
     const chunks = await this.prisma.documentChunk.findMany({
@@ -116,7 +123,7 @@ export class DocumentsService {
       .join('\n\n---\n\n');
 
     const chatHistory = useHistory
-      ? await this.getChatHistoryContext(documentId, userId)
+      ? await this.getChatHistoryContext(documentId, userId, chat.id)
       : '';
 
     const answer = await this.aiService.generateAnswer(
@@ -130,6 +137,7 @@ export class DocumentsService {
       answer,
       userId,
       documentId,
+      chatId: chat.id,
     });
 
     return {
@@ -138,6 +146,7 @@ export class DocumentsService {
       sources: rankedChunks,
       userId,
       documentId,
+      chatId: chat.id,
     };
   }
 
@@ -190,6 +199,148 @@ export class DocumentsService {
     return document;
   }
 
+  private async ensureDocumentAccess(documentId: string, userId: string) {
+    const document = await this.prisma.document.findUnique({
+      where: { id: documentId },
+      select: { id: true, userId: true },
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document not found');
+    }
+
+    if (document.userId !== userId) {
+      throw new ForbiddenException('You cannot access this document');
+    }
+
+    return document;
+  }
+
+  private async findChatByUser(
+    documentId: string,
+    chatId: string,
+    userId: string,
+  ) {
+    const chat = await this.prisma.documentChat.findUnique({
+      where: { id: chatId },
+    });
+
+    if (!chat || chat.documentId !== documentId) {
+      throw new NotFoundException('Chat not found');
+    }
+
+    if (chat.userId !== userId) {
+      throw new ForbiddenException('You cannot access this chat');
+    }
+
+    return chat;
+  }
+
+  async createChat(documentId: string, userId: string) {
+    await this.ensureDocumentAccess(documentId, userId);
+
+    const chatCount = await this.prisma.documentChat.count({
+      where: {
+        documentId,
+        userId,
+      },
+    });
+
+    return this.prisma.documentChat.create({
+      data: {
+        title: `Chat ${chatCount + 1}`,
+        documentId,
+        userId,
+      },
+    });
+  }
+
+  private async getOrCreateDefaultChat(documentId: string, userId: string) {
+    await this.ensureDocumentAccess(documentId, userId);
+
+    const chat = await this.prisma.documentChat.findFirst({
+      where: {
+        documentId,
+        userId,
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
+
+    if (chat) {
+      return chat;
+    }
+
+    return this.createChat(documentId, userId);
+  }
+
+  async getChats(documentId: string, userId: string) {
+    await this.ensureDocumentAccess(documentId, userId);
+
+    return this.prisma.documentChat.findMany({
+      where: {
+        documentId,
+        userId,
+      },
+      include: {
+        _count: {
+          select: {
+            messages: true,
+          },
+        },
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+  }
+
+  async updateChat(
+    documentId: string,
+    chatId: string,
+    userId: string,
+    title: string,
+  ) {
+    const trimmedTitle = title.trim();
+
+    if (!trimmedTitle) {
+      throw new BadRequestException('Chat title is required');
+    }
+
+    await this.findChatByUser(documentId, chatId, userId);
+
+    return this.prisma.documentChat.update({
+      where: {
+        id: chatId,
+      },
+      data: {
+        title: trimmedTitle,
+      },
+      include: {
+        _count: {
+          select: {
+            messages: true,
+          },
+        },
+      },
+    });
+  }
+
+  async deleteChat(documentId: string, chatId: string, userId: string) {
+    await this.findChatByUser(documentId, chatId, userId);
+
+    await this.prisma.documentChat.delete({
+      where: {
+        id: chatId,
+      },
+    });
+
+    return {
+      message: 'Chat deleted successfully',
+    };
+  }
+
   async deleteDocument(documentId: string, userId: string) {
     const document = await this.prisma.document.findUnique({
       where: { id: documentId },
@@ -225,30 +376,24 @@ export class DocumentsService {
     answer: string;
     userId: string;
     documentId: string;
+    chatId: string;
   }) {
     return this.prisma.chatMessage.create({
       data,
     });
   }
 
-  async getMessages(documentId: string, userId: string) {
-    const document = await this.prisma.document.findUnique({
-      where: {
-        id: documentId,
-      },
-    });
+  async getMessages(documentId: string, userId: string, chatId?: string) {
+    await this.ensureDocumentAccess(documentId, userId);
 
-    if (!document) {
-      throw new NotFoundException('Document not found');
-    }
-
-    if (document.userId !== userId) {
-      throw new ForbiddenException('You cannot access this document');
-    }
+    const chat = chatId
+      ? await this.findChatByUser(documentId, chatId, userId)
+      : await this.getOrCreateDefaultChat(documentId, userId);
 
     return this.prisma.chatMessage.findMany({
       where: {
         documentId,
+        chatId: chat.id,
       },
       orderBy: {
         createdAt: 'asc',
@@ -256,11 +401,16 @@ export class DocumentsService {
     });
   }
 
-  private async getChatHistoryContext(documentId: string, userId: string) {
+  private async getChatHistoryContext(
+    documentId: string,
+    userId: string,
+    chatId: string,
+  ) {
     const messages = await this.prisma.chatMessage.findMany({
       where: {
         documentId,
         userId,
+        chatId,
       },
       orderBy: {
         createdAt: 'desc',

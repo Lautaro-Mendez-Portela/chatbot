@@ -2,14 +2,14 @@
 import { computed, onMounted, ref } from 'vue';
 import api from '../api/api';
 
-const emit = defineEmits(['logout', 'auth-expired']);
+const emit = defineEmits(['logout', 'auth-expired', 'open-chat']);
 
 const documents = ref([]);
 const selectedFile = ref(null);
+const fileInput = ref(null);
 const isLoading = ref(false);
 const isUploading = ref(false);
 const isDeleting = ref('');
-const selectedDocument = ref(null);
 const errorMessage = ref('');
 const successMessage = ref('');
 
@@ -25,6 +25,41 @@ const formatDate = (date) =>
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(date));
+
+const getUserEmail = () => {
+  const token = localStorage.getItem('token');
+
+  if (!token) return 'Usuario';
+
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return payload.email || 'Usuario';
+  } catch {
+    return 'Usuario';
+  }
+};
+
+const userEmail = ref(getUserEmail());
+
+const friendlyError = (error, fallback) => {
+  if (!error.response) {
+    return 'No pudimos conectar con el servidor. Verifica que el backend este encendido.';
+  }
+
+  if (error.response.status === 413) {
+    return 'El PDF es demasiado grande. El maximo permitido es 15 MB.';
+  }
+
+  if (error.response.status === 400) {
+    return error.response.data?.message || 'Archivo no permitido. Subi solo PDFs validos.';
+  }
+
+  if (error.response.status === 404) {
+    return 'Documento no encontrado.';
+  }
+
+  return error.response.data?.message || fallback;
+};
 
 const handleAuthError = (error) => {
   if (error.response?.status === 401) {
@@ -45,9 +80,7 @@ const loadDocuments = async () => {
     documents.value = data;
   } catch (error) {
     if (handleAuthError(error)) return;
-
-    errorMessage.value =
-      'No pudimos cargar tus documentos. Intenta nuevamente.';
+    errorMessage.value = friendlyError(error, 'No pudimos cargar tus documentos.');
   } finally {
     isLoading.value = false;
   }
@@ -70,7 +103,10 @@ const uploadDocument = async () => {
     return;
   }
 
-  if (selectedFile.value.type !== 'application/pdf') {
+  if (
+    selectedFile.value.type !== 'application/pdf' ||
+    !selectedFile.value.name.toLowerCase().endsWith('.pdf')
+  ) {
     errorMessage.value = 'Solo se permiten archivos PDF.';
     return;
   }
@@ -82,46 +118,47 @@ const uploadDocument = async () => {
 
   const formData = new FormData();
   formData.append('file', selectedFile.value);
-
   isUploading.value = true;
 
   try {
     await api.post('/documents/upload', formData);
     selectedFile.value = null;
+
+    if (fileInput.value) {
+      fileInput.value.value = '';
+    }
+
     successMessage.value = 'PDF subido correctamente.';
     await loadDocuments();
   } catch (error) {
     if (handleAuthError(error)) return;
-
-    errorMessage.value =
-      error.response?.data?.message ||
-      'No pudimos subir el PDF. Intenta nuevamente.';
+    errorMessage.value = friendlyError(error, 'No pudimos subir el PDF.');
   } finally {
     isUploading.value = false;
   }
 };
 
-const deleteDocument = async (documentId) => {
+const deleteDocument = async (document) => {
+  const confirmed = window.confirm(
+    `Seguro que queres eliminar "${document.title}"? Esta accion no se puede deshacer.`,
+  );
+
+  if (!confirmed) return;
+
   errorMessage.value = '';
   successMessage.value = '';
-  isDeleting.value = documentId;
+  isDeleting.value = document.id;
 
   try {
-    await api.delete(`/documents/${documentId}`);
+    await api.delete(`/documents/${document.id}`);
     successMessage.value = 'Documento eliminado correctamente.';
     await loadDocuments();
   } catch (error) {
     if (handleAuthError(error)) return;
-
-    errorMessage.value =
-      'No pudimos eliminar el documento. Intenta nuevamente.';
+    errorMessage.value = friendlyError(error, 'No pudimos eliminar el documento.');
   } finally {
     isDeleting.value = '';
   }
-};
-
-const viewDocument = (document) => {
-  selectedDocument.value = document;
 };
 
 const logout = () => {
@@ -133,159 +170,312 @@ onMounted(loadDocuments);
 </script>
 
 <template>
-  <main class="documents-page">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Biblioteca</p>
-        <h1>Mis documentos</h1>
+  <main class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">AI</div>
+        <div>
+          <strong>ChatPDF</strong>
+          <span>{{ userEmail }}</span>
+        </div>
       </div>
 
-      <button class="ghost-button" type="button" @click="logout">
-        Cerrar sesion
-      </button>
-    </header>
+      <button class="nav-button active" type="button">Mis documentos</button>
 
-    <section class="upload-panel">
-      <div class="upload-copy">
-        <h2>Subir PDF</h2>
-        <p>Agrega documentos PDF de hasta 15 MB.</p>
-      </div>
-
-      <form class="upload-form" @submit.prevent="uploadDocument">
-        <label class="file-field">
-          <span>{{ selectedFile?.name || 'Seleccionar PDF' }}</span>
-          <input
-            type="file"
-            accept="application/pdf,.pdf"
-            :disabled="isUploading"
-            @change="handleFileChange"
-          />
-        </label>
-
-        <button class="primary-button" type="submit" :disabled="isUploading">
-          {{ isUploading ? 'Subiendo...' : 'Subir PDF' }}
+      <div class="sidebar-documents">
+        <button
+          v-for="document in documents"
+          :key="document.id"
+          class="sidebar-document"
+          type="button"
+          @click="emit('open-chat', document.id)"
+        >
+          <span>PDF</span>
+          <strong>{{ document.title }}</strong>
         </button>
-      </form>
-    </section>
 
-    <p v-if="successMessage" class="message success">{{ successMessage }}</p>
-    <p v-if="errorMessage" class="message error">{{ errorMessage }}</p>
+        <p v-if="!isLoading && !hasDocuments" class="sidebar-empty">
+          Sin documentos todavia
+        </p>
+      </div>
 
-    <section class="documents-section">
-      <div class="section-header">
-        <h2>Documentos cargados</h2>
-        <button class="text-button" type="button" :disabled="isLoading" @click="loadDocuments">
-          {{ isLoading ? 'Actualizando...' : 'Actualizar' }}
+      <button class="nav-button" type="button" @click="loadDocuments">Actualizar</button>
+
+      <div class="sidebar-footer">
+        <button class="ghost-button full" type="button" @click="logout">
+          Cerrar sesion
         </button>
       </div>
+    </aside>
 
-      <div v-if="isLoading && !hasDocuments" class="empty-state">
-        Cargando documentos...
-      </div>
+    <section class="content">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Biblioteca</p>
+          <h1>Mis documentos</h1>
+          <p>Subi PDFs, abri un chat y pregunta sobre su contenido.</p>
+        </div>
+      </header>
 
-      <div v-else-if="!hasDocuments" class="empty-state">
-        Todavia no subiste documentos.
-      </div>
-
-      <div v-else class="documents-list">
-        <article v-for="document in documents" :key="document.id" class="document-row">
-          <div class="document-icon">PDF</div>
-
-          <div class="document-info">
-            <h3>{{ document.title }}</h3>
-            <p>
-              {{ formatDate(document.createdAt) }}
-              <span v-if="document._count?.chunks">
-                · {{ document._count.chunks }} fragmentos
-              </span>
-            </p>
-          </div>
-
-          <div class="document-actions">
-            <button class="secondary-button" type="button" @click="viewDocument(document)">
-              Ver
-            </button>
-            <button
-              class="danger-button"
-              type="button"
-              :disabled="isDeleting === document.id"
-              @click="deleteDocument(document.id)"
-            >
-              {{ isDeleting === document.id ? 'Eliminando...' : 'Eliminar' }}
-            </button>
-          </div>
-        </article>
-      </div>
-    </section>
-
-    <section v-if="selectedDocument" class="detail-panel">
-      <div class="detail-card">
-        <div class="detail-header">
-          <h2>{{ selectedDocument.title }}</h2>
-          <button class="text-button" type="button" @click="selectedDocument = null">
-            Cerrar
-          </button>
+      <section class="upload-panel">
+        <div>
+          <h2>Subir PDF</h2>
+          <p>Archivos PDF de hasta 15 MB.</p>
         </div>
 
-        <dl>
-          <div>
-            <dt>Archivo</dt>
-            <dd>{{ selectedDocument.filename }}</dd>
-          </div>
-          <div>
-            <dt>Fecha</dt>
-            <dd>{{ formatDate(selectedDocument.createdAt) }}</dd>
-          </div>
-          <div>
-            <dt>Fragmentos</dt>
-            <dd>{{ selectedDocument._count?.chunks || 0 }}</dd>
-          </div>
-        </dl>
-      </div>
+        <form class="upload-form" @submit.prevent="uploadDocument">
+          <label class="file-field">
+            <span>{{ selectedFile?.name || 'Seleccionar PDF' }}</span>
+            <input
+              ref="fileInput"
+              type="file"
+              accept="application/pdf,.pdf"
+              :disabled="isUploading"
+              @change="handleFileChange"
+            />
+          </label>
+
+          <button class="primary-button" type="submit" :disabled="isUploading">
+            <span v-if="isUploading" class="button-loader"></span>
+            {{ isUploading ? 'Subiendo...' : 'Subir PDF' }}
+          </button>
+        </form>
+      </section>
+
+      <p v-if="successMessage" class="message success">{{ successMessage }}</p>
+      <p v-if="errorMessage" class="message error">{{ errorMessage }}</p>
+
+      <section class="documents-panel">
+        <div class="section-header">
+          <h2>Documentos cargados</h2>
+          <span>{{ documents.length }} documentos</span>
+        </div>
+
+        <div v-if="isLoading && !hasDocuments" class="empty-state">
+          <span class="loader"></span>
+          Cargando documentos...
+        </div>
+
+        <div v-else-if="!hasDocuments" class="empty-state">
+          <strong>Todavia no subiste documentos.</strong>
+          <span>Cuando subas un PDF, va a aparecer aca listo para chatear.</span>
+        </div>
+
+        <div v-else class="documents-list">
+          <article v-for="document in documents" :key="document.id" class="document-row">
+            <button class="document-main" type="button" @click="emit('open-chat', document.id)">
+              <span class="document-icon">PDF</span>
+              <span class="document-info">
+                <strong>{{ document.title }}</strong>
+                <small>
+                  {{ formatDate(document.createdAt) }}
+                  <span v-if="document._count?.chunks">
+                    - {{ document._count.chunks }} fragmentos
+                  </span>
+                </small>
+              </span>
+            </button>
+
+            <div class="document-actions">
+              <button class="secondary-button" type="button" @click="emit('open-chat', document.id)">
+                Abrir chat
+              </button>
+              <button
+                class="danger-button"
+                type="button"
+                :disabled="isDeleting === document.id"
+                @click="deleteDocument(document)"
+              >
+                {{ isDeleting === document.id ? 'Eliminando...' : 'Eliminar' }}
+              </button>
+            </div>
+          </article>
+        </div>
+      </section>
     </section>
   </main>
 </template>
 
 <style scoped>
-.documents-page {
-  min-height: 100vh;
-  padding: 32px;
-  background: #f4f7fb;
+.app-shell {
+  width: 100%;
+  height: 100dvh;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  overflow: hidden;
+  background: #eef2f7;
   color: #172033;
+}
+
+.sidebar {
+  min-width: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border-right: 1px solid #d8e1ec;
+  background: #101827;
+  color: #ffffff;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.brand-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #1f6feb;
+  font-weight: 900;
+}
+
+.brand strong,
+.brand span {
+  display: block;
+}
+
+.brand span {
+  max-width: 180px;
+  overflow: hidden;
+  color: #aebbd0;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-button,
+.ghost-button {
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 14px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.nav-button {
+  color: #d7e2f2;
+  background: transparent;
   text-align: left;
 }
 
-.topbar {
-  max-width: 1080px;
-  margin: 0 auto 24px;
-  display: flex;
+.nav-button.active,
+.nav-button:hover {
+  background: #1b2638;
+}
+
+.sidebar-documents {
+  display: grid;
+  gap: 6px;
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.sidebar-document {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: #d7e2f2;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-document:hover {
+  background: #1b2638;
+}
+
+.sidebar-document span {
+  color: #ffb4bd;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.sidebar-document strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-empty {
+  margin: 4px 10px;
+  color: #8fa0b8;
+  font-size: 13px;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+}
+
+.full {
+  width: 100%;
+}
+
+.content {
+  min-width: 0;
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+  padding: 32px;
+}
+
+.page-header,
+.upload-panel,
+.documents-panel,
+.message {
+  max-width: 1120px;
+  margin-inline: auto;
+}
+
+.page-header {
+  margin-bottom: 24px;
 }
 
 .eyebrow {
   margin: 0 0 4px;
   color: #66758d;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 800;
   text-transform: uppercase;
 }
 
-.topbar h1 {
+.page-header h1 {
   margin: 0;
   color: #172033;
-  font-size: 34px;
-  font-weight: 800;
+  font-size: 36px;
+  font-weight: 850;
   letter-spacing: 0;
 }
 
+.page-header p,
+.upload-panel p {
+  margin: 6px 0 0;
+  color: #66758d;
+}
+
 .upload-panel,
-.documents-section,
-.detail-panel,
-.message {
-  max-width: 1080px;
-  margin-inline: auto;
+.documents-panel {
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 50px rgba(31, 45, 61, 0.08);
 }
 
 .upload-panel {
@@ -294,45 +484,31 @@ onMounted(loadDocuments);
   align-items: center;
   gap: 20px;
   padding: 24px;
-  border: 1px solid #dce5ef;
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 16px 45px rgba(31, 45, 61, 0.08);
 }
 
-.upload-copy h2,
-.documents-section h2 {
-  margin: 0 0 6px;
+.upload-panel h2,
+.documents-panel h2 {
+  margin: 0;
   color: #172033;
   font-size: 20px;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-
-.upload-copy p {
-  margin: 0;
-  color: #66758d;
-  font-size: 15px;
+  font-weight: 850;
 }
 
 .upload-form {
   display: flex;
-  align-items: center;
   gap: 12px;
 }
 
 .file-field {
   position: relative;
-  min-width: 230px;
-  max-width: 320px;
-  border: 1px dashed #b9c6d6;
+  min-width: 240px;
+  max-width: 340px;
+  border: 1px dashed #aebbd0;
   border-radius: 8px;
   padding: 12px 14px;
   color: #435169;
   background: #fbfdff;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
+  font-weight: 800;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -348,24 +524,22 @@ onMounted(loadDocuments);
 .primary-button,
 .secondary-button,
 .danger-button,
-.ghost-button,
-.text-button {
+.ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
   border-radius: 8px;
+  padding: 0 14px;
   font: inherit;
   font-size: 14px;
-  font-weight: 800;
+  font-weight: 850;
   cursor: pointer;
-  transition:
-    background-color 0.2s ease,
-    border-color 0.2s ease,
-    color 0.2s ease,
-    opacity 0.2s ease;
 }
 
 .primary-button {
-  min-height: 46px;
   border: 0;
-  padding: 0 18px;
   color: #ffffff;
   background: #1f6feb;
 }
@@ -376,41 +550,26 @@ onMounted(loadDocuments);
 
 .secondary-button,
 .ghost-button {
-  min-height: 40px;
   border: 1px solid #cbd6e4;
-  padding: 0 14px;
   color: #25324a;
   background: #ffffff;
 }
 
-.secondary-button:hover:not(:disabled),
-.ghost-button:hover:not(:disabled) {
-  border-color: #8fa4bd;
-  background: #f8fafc;
+.ghost-button {
+  color: #d7e2f2;
+  border-color: #34445e;
+  background: #162235;
 }
 
 .danger-button {
-  min-height: 40px;
   border: 1px solid #f0b8bf;
-  padding: 0 14px;
   color: #9f1d2d;
   background: #fff6f7;
 }
 
-.danger-button:hover:not(:disabled) {
-  background: #ffe8eb;
-}
-
-.text-button {
-  border: 0;
-  padding: 8px 0;
-  color: #1f6feb;
-  background: transparent;
-}
-
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.62;
 }
 
 .message {
@@ -432,12 +591,12 @@ button:disabled {
   border: 1px solid #f5c2c7;
 }
 
-.documents-section {
+.documents-panel {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   margin-top: 24px;
   padding: 24px;
-  border: 1px solid #dce5ef;
-  border-radius: 8px;
-  background: #ffffff;
 }
 
 .section-header {
@@ -448,50 +607,71 @@ button:disabled {
   margin-bottom: 18px;
 }
 
+.section-header span {
+  color: #66758d;
+  font-size: 14px;
+  font-weight: 800;
+}
+
 .documents-list {
+  min-height: 0;
   display: grid;
   gap: 12px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .document-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
+  grid-template-columns: 1fr auto;
   gap: 14px;
-  padding: 16px;
+  align-items: center;
+  padding: 14px;
   border: 1px solid #e4ebf3;
   border-radius: 8px;
   background: #fbfdff;
+}
+
+.document-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
 }
 
 .document-icon {
   width: 48px;
   height: 48px;
   display: grid;
+  flex: 0 0 auto;
   place-items: center;
   border-radius: 8px;
   color: #c82032;
   background: #fff0f2;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 950;
 }
 
 .document-info {
   min-width: 0;
+  display: grid;
+  gap: 4px;
 }
 
-.document-info h3 {
-  margin: 0 0 4px;
+.document-info strong {
   overflow: hidden;
   color: #172033;
   font-size: 16px;
-  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.document-info p {
-  margin: 0;
+.document-info small {
   color: #66758d;
   font-size: 14px;
 }
@@ -502,100 +682,73 @@ button:disabled {
 }
 
 .empty-state {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 160px;
   border: 1px dashed #cbd6e4;
   border-radius: 8px;
-  padding: 32px;
+  padding: 28px;
   color: #66758d;
   background: #fbfdff;
   text-align: center;
 }
 
-.detail-panel {
-  margin-top: 24px;
-}
-
-.detail-card {
-  padding: 24px;
-  border: 1px solid #dce5ef;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.detail-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-.detail-header h2 {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.detail-card dl {
-  display: grid;
-  gap: 12px;
-  margin: 0;
-}
-
-.detail-card dl > div {
-  display: grid;
-  grid-template-columns: 120px 1fr;
-  gap: 16px;
-  padding-top: 12px;
-  border-top: 1px solid #e4ebf3;
-}
-
-.detail-card dt {
-  color: #66758d;
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.detail-card dd {
-  margin: 0;
+.empty-state strong {
   color: #172033;
-  overflow-wrap: anywhere;
 }
 
-@media (max-width: 760px) {
-  .documents-page {
+.loader,
+.button-loader {
+  width: 18px;
+  height: 18px;
+  border: 3px solid #d8e1ec;
+  border-top-color: #1f6feb;
+  border-radius: 999px;
+  animation: spin 0.8s linear infinite;
+}
+
+.button-loader {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  border-color: rgba(255, 255, 255, 0.45);
+  border-top-color: #ffffff;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 840px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .sidebar {
+    height: auto;
+  }
+
+  .content {
+    height: auto;
+    overflow: visible;
     padding: 20px;
   }
 
-  .topbar,
   .upload-panel,
-  .section-header,
   .upload-form,
   .document-row,
   .document-actions {
-    align-items: stretch;
     grid-template-columns: 1fr;
     flex-direction: column;
-  }
-
-  .topbar {
-    align-items: flex-start;
-  }
-
-  .upload-panel {
-    display: grid;
-  }
-
-  .upload-form,
-  .document-actions {
-    display: flex;
+    align-items: stretch;
   }
 
   .file-field {
     max-width: none;
-  }
-
-  .detail-card dl > div {
-    grid-template-columns: 1fr;
-    gap: 4px;
   }
 }
 </style>

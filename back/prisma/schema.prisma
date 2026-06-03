@@ -20,6 +20,7 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   documents Document[]
+  documentChats DocumentChat[]
   chatMessages ChatMessage[]
 
 }
@@ -35,7 +36,21 @@ model Document {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   chunks DocumentChunk[]
+  chats DocumentChat[]
   chatMessages ChatMessage[]
+}
+
+model DocumentChat {
+  id         String   @id @default(cuid())
+  title      String
+  documentId String
+  userId     String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id])
+  messages   ChatMessage[]
 }
 
 model DocumentChunk {
@@ -54,8 +69,10 @@ model ChatMessage {
   answer     String
   documentId String
   userId     String
+  chatId     String?
   createdAt  DateTime @default(now())
 
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   user       User     @relation(fields: [userId], references: [id])
+  chat       DocumentChat? @relation(fields: [chatId], references: [id], onDelete: Cascade)
 }
